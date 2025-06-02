@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple demonstration of chunking and metadata extraction for labor_rules.md.
-This script shows how the document is split into chunks and what metadata is extracted.
+Enhanced demonstration of chunking and metadata extraction for labor_rules.md.
+This script shows how the document is split into chunks with per-chunk section extraction.
 """
 
 import os
@@ -13,7 +13,7 @@ from typing import List, Dict, Any
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import the functions from the ingest script
-from scripts.ingest import preprocess_markdown, chunk_text, extract_metadata
+from scripts.ingest import preprocess_markdown, chunk_markdown_with_headers, extract_metadata
 
 def display_chunk_info(chunk: str, metadata: Dict[str, Any], index: int, total: int) -> None:
     """
@@ -29,21 +29,14 @@ def display_chunk_info(chunk: str, metadata: Dict[str, Any], index: int, total: 
     print(f"  Title: {metadata['title']}")
     
     # Display section information
-    if metadata['section']:
+    if 'section' in metadata and metadata['section']:
         print(f"  Section: {metadata['section']}")
     else:
-        # Try to extract section from the chunk content
-        section_match = re.search(r'##\s+([^\n]+)', chunk)
-        if section_match:
-            print(f"  Section: {section_match.group(1)}")
-        else:
-            print(f"  Section: [No section found]")
-        
-        # Try to extract subsections for additional context
-        subsections = re.findall(r'###\s+([^\n]+)', chunk)
-        if subsections:
-            print(f"  Subsections: {', '.join(subsections[:3])}" +
-                  (f" (and {len(subsections)-3} more)" if len(subsections) > 3 else ""))
+        print(f"  Section: [No section found]")
+    
+    # Display subsection information if available
+    if 'subsection' in metadata and metadata['subsection']:
+        print(f"  Subsection: {metadata['subsection']}")
     
     print(f"  Path: {metadata['path']}")
     print(f"  Chunk ID: {metadata['chunk_id']}")
@@ -56,15 +49,37 @@ def display_chunk_info(chunk: str, metadata: Dict[str, Any], index: int, total: 
     else:
         print(chunk)
 
+def create_test_document_with_multiple_sections():
+    """
+    Create a test document with multiple sections in close proximity to demonstrate
+    the per-chunk section extraction.
+    """
+    return """# Test Document with Multiple Sections
+
+## Section 1
+This is content for section 1.
+
+## Section 2
+This is content for section 2.
+
+## Section 3
+This is content for section 3.
+
+## Section 4
+This is content for section 4.
+"""
+
 def main():
     """
     Main function to demonstrate chunking and metadata extraction.
     """
-    # Path to the labor_rules.md file
-    file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+    # First process the labor_rules.md file
+    file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "docs", "labor_rules.md")
     
-    print(f"Processing file: {file_path}")
+    print(f"\n{'='*80}")
+    print(f"PROCESSING REAL DOCUMENT: {file_path}")
+    print(f"{'='*80}")
     
     # Read the file
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -73,56 +88,59 @@ def main():
     # Preprocess the content
     processed_content = preprocess_markdown(content)
     
-    # Extract base metadata with a custom approach for this demo
-    base_metadata = extract_metadata(file_path, processed_content)
+    # Print the first 100 characters of the processed content to debug
+    print(f"\nProcessed content starts with: '{processed_content[:100]}...'")
     
-    # Fix the title if it's too long (likely grabbed the whole document)
-    if len(base_metadata['title']) > 100:
-        # Try to extract just the main title
-        title_match = re.search(r'^#\s+([^\n]+)', content)
-        if title_match:
-            base_metadata['title'] = title_match.group(1)
-        else:
-            base_metadata['title'] = os.path.basename(file_path).replace('.md', '')
-    
-    # Chunk the document (using a smaller chunk size for demonstration)
-    chunks = chunk_text(processed_content, chunk_size=300, chunk_overlap=50)
-    
-    # Analyze chunks to identify main sections and their distribution
-    print("\nSECTION DISTRIBUTION ACROSS CHUNKS:")
-    for i, chunk in enumerate(chunks):
-        section_matches = re.findall(r'##\s+([^\n]+)', chunk)
-        if section_matches:
-            # Clean up the section names to just show the heading text
-            clean_sections = []
-            for section in section_matches:
-                # Extract just the section name without any following content
-                clean_section = section.split(' ###')[0].strip()
-                clean_sections.append(clean_section)
-            
-            sections_str = ", ".join(clean_sections)
-            print(f"  Chunk {i+1}: {sections_str}")
+    # Chunk the document using LangChain's MarkdownHeaderTextSplitter
+    chunks_with_metadata = chunk_markdown_with_headers(processed_content)
     
     # Print document split message
-    print(f"\nDocument split into {len(chunks)} chunks")
+    print(f"\nDocument split into {len(chunks_with_metadata)} chunks")
     
     # Display information for each chunk
-    for i, chunk in enumerate(chunks):
-        # Add chunk-specific metadata
-        chunk_metadata = base_metadata.copy()
-        chunk_metadata["chunk_id"] = i
-        chunk_metadata["chunk_total"] = len(chunks)
+    for i, chunk_with_metadata in enumerate(chunks_with_metadata):
+        # Extract text and metadata
+        chunk_text = chunk_with_metadata.page_content
+        chunk_header_metadata = chunk_with_metadata.metadata
         
-        # Extract section for this specific chunk - clean up the section name
-        section_match = re.search(r'##\s+([^\n]+)', chunk)
-        if section_match:
-            # Extract just the section name without any following content
-            section_text = section_match.group(1)
-            clean_section = section_text.split(' ###')[0].strip()
-            chunk_metadata["section"] = clean_section
+        # Create full metadata
+        chunk_metadata = extract_metadata(file_path, chunk_header_metadata)
+        chunk_metadata["chunk_id"] = i
+        chunk_metadata["chunk_total"] = len(chunks_with_metadata)
         
         # Display chunk info
-        display_chunk_info(chunk, chunk_metadata, i, len(chunks))
+        display_chunk_info(chunk_text, chunk_metadata, i, len(chunks_with_metadata))
+    
+    # Now process a test document specifically designed to show multiple sections in one chunk
+    print(f"\n{'='*80}")
+    print(f"PROCESSING TEST DOCUMENT WITH MULTIPLE SECTIONS PER CHUNK")
+    print(f"{'='*80}")
+    
+    test_content = create_test_document_with_multiple_sections()
+    processed_test_content = preprocess_markdown(test_content)
+    
+    # Print the first 100 characters of the processed test content to debug
+    print(f"\nProcessed test content starts with: '{processed_test_content[:100]}...'")
+    
+    # Chunk the test document using LangChain's MarkdownHeaderTextSplitter
+    test_chunks_with_metadata = chunk_markdown_with_headers(processed_test_content)
+    
+    # Print document split message
+    print(f"\nTest document split into {len(test_chunks_with_metadata)} chunks")
+    
+    # Display information for each chunk
+    for i, chunk_with_metadata in enumerate(test_chunks_with_metadata):
+        # Extract text and metadata
+        chunk_text = chunk_with_metadata.page_content
+        chunk_header_metadata = chunk_with_metadata.metadata
+        
+        # Create full metadata
+        chunk_metadata = extract_metadata("test_multiple_sections.md", chunk_header_metadata)
+        chunk_metadata["chunk_id"] = i
+        chunk_metadata["chunk_total"] = len(test_chunks_with_metadata)
+        
+        # Display chunk info
+        display_chunk_info(chunk_text, chunk_metadata, i, len(test_chunks_with_metadata))
 
 if __name__ == "__main__":
     main()

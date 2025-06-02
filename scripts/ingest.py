@@ -19,6 +19,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 import tiktoken
 from tqdm import tqdm
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 # Load environment variables
 load_dotenv()
@@ -43,74 +44,85 @@ def preprocess_markdown(text: str) -> str:
     text = re.sub(r'!\[.*?\]\(.*?\)', '', text)  # Remove image links
     text = re.sub(r'<[^>]*>', '', text)  # Remove HTML tags
     
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    
     return text
 
-def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 50) -> List[str]:
+def chunk_markdown_with_headers(text: str) -> List[Dict[str, Any]]:
     """
-    Split text into chunks of approximately chunk_size tokens with specified overlap.
+    Split markdown text into chunks based on headers using LangChain's MarkdownHeaderTextSplitter.
+    Returns a list of dictionaries with text and metadata.
+    
+    Manually processes the chunks to ensure proper metadata inheritance from parent headers.
     """
-    tokens = tokenizer.encode(text)
-    chunks = []
+    # Define the headers to split on
+    headers_to_split_on = [
+        ("#", "title"),
+        ("##", "section"),
+        ("###", "subsection"),
+    ]
     
-    if len(tokens) <= chunk_size:
-        return [text]
+    # Create the splitter
+    markdown_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=headers_to_split_on,
+        strip_headers=False,
+        return_each_line=False
+    )
     
-    i = 0
-    while i < len(tokens):
-        # Get chunk_size tokens
-        chunk_end = min(i + chunk_size, len(tokens))
-        chunk = tokenizer.decode(tokens[i:chunk_end])
+    # Split the text
+    chunks = markdown_splitter.split_text(text)
+    
+    # Process chunks to ensure metadata inheritance
+    processed_chunks = []
+    current_title = ""
+    current_section = ""
+    
+    for chunk in chunks:
+        # Extract metadata
+        metadata = chunk.metadata
         
-        # If not the last chunk, try to break at a paragraph or sentence
-        if chunk_end < len(tokens):
-            # Prefer breaking at paragraphs
-            paragraphs = chunk.split('\n\n')
-            if len(paragraphs) > 1:
-                # Keep all but the last paragraph
-                chunk = '\n\n'.join(paragraphs[:-1])
-                # Adjust token position based on actual chunk used
-                i += len(tokenizer.encode(chunk))
-            else:
-                # If no paragraph breaks, try sentence breaks
-                sentences = re.split(r'(?<=[.!?])\s+', chunk)
-                if len(sentences) > 1:
-                    # Keep all but the last sentence
-                    chunk = ' '.join(sentences[:-1])
-                    i += len(tokenizer.encode(chunk))
-                else:
-                    # If no good breaks, just use the chunk as is
-                    i += chunk_size - chunk_overlap
+        # Ensure title inheritance
+        if "title" in metadata:
+            current_title = metadata["title"]
         else:
-            # Last chunk, move to end
-            i = len(tokens)
-        
-        chunks.append(chunk)
+            metadata["title"] = current_title
+            
+        # Ensure section inheritance
+        if "section" in metadata:
+            current_section = metadata["section"]
+        else:
+            metadata["section"] = current_section
+            
+        # Add to processed chunks
+        processed_chunks.append(chunk)
     
-    return chunks
+    return processed_chunks
 
-def extract_metadata(file_path: str, text: str) -> Dict[str, Any]:
+def extract_metadata(file_path: str, chunk_metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract metadata from markdown file and content.
+    Extract and format metadata from file path and chunk metadata.
     """
     filename = os.path.basename(file_path)
     
-    # Extract title from first heading if available
-    title_match = re.search(r'^#\s+(.+)$', text, re.MULTILINE)
-    title = title_match.group(1) if title_match else filename
-    
-    # Extract section headings
-    headings = re.findall(r'^(#{2,4})\s+(.+)$', text, re.MULTILINE)
-    section = headings[0][1] if headings else ""
-    
-    return {
+    # Start with basic metadata
+    metadata = {
         "source": filename,
-        "title": title,
-        "section": section,
         "path": file_path
     }
+    
+    # Add metadata from chunk
+    if "title" in chunk_metadata:
+        metadata["title"] = chunk_metadata["title"]
+    else:
+        metadata["title"] = filename
+        
+    if "section" in chunk_metadata:
+        metadata["section"] = chunk_metadata["section"]
+    else:
+        metadata["section"] = ""
+        
+    if "subsection" in chunk_metadata:
+        metadata["subsection"] = chunk_metadata["subsection"]
+    
+    return metadata
 
 def ingest_docs(docs_dir: str, db_path: str) -> None:
     """
@@ -140,21 +152,26 @@ def ingest_docs(docs_dir: str, db_path: str) -> None:
         # Preprocess content
         processed_content = preprocess_markdown(content)
         
-        # Extract base metadata
-        base_metadata = extract_metadata(file_path, processed_content)
-        
-        # Chunk the document
-        chunks = chunk_text(processed_content)
+        # Chunk the document using header-based splitting
+        chunks_with_metadata = chunk_markdown_with_headers(processed_content)
         
         # Store chunks with metadata
-        for i, chunk in enumerate(chunks):
-            doc_chunks.append(chunk)
+        for i, chunk_with_metadata in enumerate(chunks_with_metadata):
+            # Extract text and metadata
+            chunk_text = chunk_with_metadata.page_content
+            chunk_header_metadata = chunk_with_metadata.metadata
             
-            # Add chunk-specific metadata
-            chunk_metadata = base_metadata.copy()
+            # Skip empty chunks
+            if not chunk_text.strip():
+                continue
+                
+            # Create full metadata
+            chunk_metadata = extract_metadata(file_path, chunk_header_metadata)
             chunk_metadata["chunk_id"] = i
-            chunk_metadata["chunk_total"] = len(chunks)
+            chunk_metadata["chunk_total"] = len(chunks_with_metadata)
             
+            # Add to collections
+            doc_chunks.append(chunk_text)
             metadatas.append(chunk_metadata)
             ids.append(f"chunk_{chunk_id}")
             chunk_id += 1

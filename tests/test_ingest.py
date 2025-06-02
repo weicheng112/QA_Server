@@ -12,7 +12,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 # Import functions from ingest.py
-from scripts.ingest import extract_metadata, ingest_docs, preprocess_markdown, chunk_text
+from scripts.ingest import extract_metadata, ingest_docs, preprocess_markdown, chunk_markdown_with_headers
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 class TestExtractMetadata(unittest.TestCase):
     """Test the extract_metadata function"""
@@ -43,9 +44,14 @@ class TestExtractMetadata(unittest.TestCase):
     def test_extract_metadata_with_headings(self):
         """Test extract_metadata with a document that has headings"""
         file_path = self.file_paths['simple.md']
-        content = self.test_files['simple.md']
         
-        metadata = extract_metadata(file_path, content)
+        # Create metadata similar to what LangChain would produce
+        chunk_metadata = {
+            "title": "Simple Document",
+            "section": "First Section"
+        }
+        
+        metadata = extract_metadata(file_path, chunk_metadata)
         
         self.assertEqual(metadata['source'], 'simple.md')
         self.assertEqual(metadata['title'], 'Simple Document')
@@ -55,9 +61,11 @@ class TestExtractMetadata(unittest.TestCase):
     def test_extract_metadata_without_headings(self):
         """Test extract_metadata with a document that has no headings"""
         file_path = self.file_paths['no_headings.md']
-        content = self.test_files['no_headings.md']
         
-        metadata = extract_metadata(file_path, content)
+        # Create empty metadata
+        chunk_metadata = {}
+        
+        metadata = extract_metadata(file_path, chunk_metadata)
         
         self.assertEqual(metadata['source'], 'no_headings.md')
         self.assertEqual(metadata['title'], 'no_headings.md')
@@ -67,13 +75,20 @@ class TestExtractMetadata(unittest.TestCase):
     def test_extract_metadata_complex_document(self):
         """Test extract_metadata with a complex document structure"""
         file_path = self.file_paths['complex.md']
-        content = self.test_files['complex.md']
         
-        metadata = extract_metadata(file_path, content)
+        # Create metadata similar to what LangChain would produce
+        chunk_metadata = {
+            "title": "Complex Document",
+            "section": "Section 1",
+            "subsection": "Subsection 1.1"
+        }
+        
+        metadata = extract_metadata(file_path, chunk_metadata)
         
         self.assertEqual(metadata['source'], 'complex.md')
         self.assertEqual(metadata['title'], 'Complex Document')
         self.assertEqual(metadata['section'], 'Section 1')
+        self.assertEqual(metadata['subsection'], 'Subsection 1.1')
         self.assertEqual(metadata['path'], file_path)
 
 
@@ -96,7 +111,7 @@ class TestIngestDocs(unittest.TestCase):
         shutil.rmtree(self.test_dir)
         shutil.rmtree(self.db_dir)
     
-    @patch('ingest.chromadb.PersistentClient')
+    @patch('scripts.ingest.chromadb.PersistentClient')
     def test_ingest_docs(self, mock_client):
         """Test ingest_docs function with mocked ChromaDB client"""
         # Set up mock collection
@@ -147,31 +162,63 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertNotIn("<div>", processed)
         self.assertIn("HTML content", processed)
         
-        # Test normalizing whitespace
-        md_with_whitespace = "# Document\n\n\n\nMultiple    spaces   and\nlines."
-        processed = preprocess_markdown(md_with_whitespace)
-        self.assertNotIn("    ", processed)
-        self.assertIn("Multiple spaces and lines", processed)
+        # Note: The updated preprocess_markdown function no longer normalizes whitespace
+        # as this is handled by LangChain's text splitter
     
-    def test_chunk_text(self):
-        """Test chunk_text function"""
-        # Test with text shorter than chunk size
-        short_text = "This is a short text."
-        chunks = chunk_text(short_text, chunk_size=100)
-        self.assertEqual(len(chunks), 1)
-        self.assertEqual(chunks[0], short_text)
+    def test_chunk_markdown_with_headers(self):
+        """Test chunk_markdown_with_headers function"""
+        # Test with a simple document
+        simple_text = "# Document Title\n\n## Section 1\n\nThis is content for section 1.\n\n## Section 2\n\nThis is content for section 2."
+        chunks = chunk_markdown_with_headers(simple_text)
         
-        # Test with text longer than chunk size
-        # Create a text with multiple paragraphs
-        long_text = "Paragraph 1.\n\nParagraph 2.\n\nParagraph 3.\n\nParagraph 4.\n\nParagraph 5."
-        # Use a very small chunk size to ensure splitting
-        chunks = chunk_text(long_text, chunk_size=5, chunk_overlap=1)
-        self.assertTrue(len(chunks) > 1)
+        # Verify we get chunks
+        self.assertTrue(len(chunks) > 0)
         
-        # Verify that all content is preserved across chunks
-        combined = " ".join(chunks)
-        for paragraph in ["Paragraph 1", "Paragraph 2", "Paragraph 3", "Paragraph 4", "Paragraph 5"]:
-            self.assertIn(paragraph, combined)
+        # Verify each chunk has metadata
+        for chunk in chunks:
+            self.assertTrue(hasattr(chunk, 'page_content'))
+            self.assertTrue(hasattr(chunk, 'metadata'))
+            
+            # Check that metadata contains expected keys
+            if 'title' in chunk.metadata:
+                self.assertEqual(chunk.metadata['title'], 'Document Title')
+            
+            # Verify section metadata is captured
+            if 'section' in chunk.metadata:
+                self.assertTrue(chunk.metadata['section'] in ['Section 1', 'Section 2'])
+        
+        # Test with a document that has subsections
+        complex_text = """# Complex Document
+        
+## Section 1
+
+Content for section 1.
+
+### Subsection 1.1
+
+Content for subsection 1.1.
+
+## Section 2
+
+Content for section 2.
+"""
+        chunks = chunk_markdown_with_headers(complex_text)
+        
+        # Verify we get chunks
+        self.assertTrue(len(chunks) > 0)
+        
+        # Find a chunk with subsection
+        subsection_chunk = None
+        for chunk in chunks:
+            if 'subsection' in chunk.metadata:
+                subsection_chunk = chunk
+                break
+                
+        # Verify subsection metadata is captured
+        if subsection_chunk:
+            self.assertEqual(subsection_chunk.metadata['title'], 'Complex Document')
+            self.assertEqual(subsection_chunk.metadata['section'], 'Section 1')
+            self.assertEqual(subsection_chunk.metadata['subsection'], 'Subsection 1.1')
 
 
 if __name__ == "__main__":

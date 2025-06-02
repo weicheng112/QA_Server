@@ -178,11 +178,6 @@ python tests/test_chunk_metadata.py
 
 When extending the system with new features, add corresponding tests to ensure functionality works as expected.
 
-## Performance Considerations
-
-- **Embedding Costs**: Be mindful of OpenAI API costs when ingesting large document collections
-- **Model Selection**: GPT-3.5-Turbo is faster and cheaper, while GPT-4 provides higher quality answers
-
 ## How It Works
 
 ### Document Processing Pipeline

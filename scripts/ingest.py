@@ -190,9 +190,9 @@ def ingest_docs(docs_dir: str, db_path: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest markdown files into ChromaDB")
-    parser.add_argument("--docs_dir", type=str, default="../docs", 
+    parser.add_argument("--docs_dir", type=str, default="docs",
                         help="Directory containing markdown files")
-    parser.add_argument("--db_path", type=str, default="../chroma_store",
+    parser.add_argument("--db_path", type=str, default="chroma_store",
                         help="Directory to store ChromaDB")
     
     args = parser.parse_args()
